@@ -69,6 +69,17 @@ class InferencePipeline():
         self.model = self.model.to(self.device)
         self.preprocessor = preprocessor
 
+    def get_image(self,
+                  image_path : str,
+                  resolution : float = 0.3) -> np.array:
+        image = Image.open(image_path)
+        transform = T.Compose([T.Resize((int(image.size[1]*resolution/0.3),
+                                         int(image.size[0]*resolution/0.3))),
+                               T.ToTensor()])
+        image = transform(image)
+        return image.permute(1, 2, 0).numpy()
+
+
     def infer(self,
               blocks : torch.Tensor,
               image_size : int = 512) -> torch.Tensor:
