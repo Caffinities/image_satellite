@@ -76,7 +76,7 @@ for epoch in tqdm(range(epochs)):
     model.train()
     for i, batch in enumerate((train_dataloader)):
         optimizer.zero_grad()
-        pixel_values = batch["pixel_values"].to(torch.float16).to(device)
+        pixel_values = batch["pixel_values"].to(device)#.to(torch.float16)
         # the dtype changes is for a bug in mismatch of dtype between model and batch["mask_labels"]
         class_labels = batch["class_labels"]
         mask_labels = [label.to(device)[:len(class_labels[i])] for i, label in enumerate(batch["mask_labels"])]

@@ -56,14 +56,14 @@ def merge_blocks(blocks : torch.Tensor,
 
 class InferencePipeline():
     def __init__(self,
-                 model_path : str="Mask2_B_resizeFalse_crop512_tiny_150.pt",
+                 model_path : str="weights/Mask2_B_resizeFalse_crop512_tiny_150.pt",
                  preprocessor = Mask2FormerImageProcessor(ignore_index=-100,
                                                           reduce_labels=False,
                                                           do_resize=False,
                                                           do_rescale=False,
                                                           do_normalize=False)):
         
-        self.model = torch.load(model_path, map_location="cpu")
+        self.model = torch.load(model_path, map_location="cpu", weights_only=False)
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.model = self.model.to(self.device)
         self.preprocessor = preprocessor
@@ -105,6 +105,13 @@ class InferencePipeline():
                 size_used : int = 300) -> torch.Tensor:
         '''
         For an entire image, return the overall segmentation mask.
+
+        Parameters:
+        ----------
+        image_size: int
+            Input image size to the model, by default 512.
+        size_used: int
+            The stride of the blocks, to avoid the boundary effect.
         '''
         blocks = split(image, image_size, size_used)
         out_blocks = self.get_seg(blocks, image_size)
@@ -117,12 +124,19 @@ class InferencePipeline():
     def compare(self,
                 image0_path : str,
                 image1_path : str,
-                resolution0 : float = 0.3, # default 0.3m/pixel
-                resolution1 : float = 0.3, # default 0.3m/pixel
+                resolution0 : float = 0.3,
+                resolution1 : float = 0.3,
                 img_size : int = 512,
                 size_used : int = 300) -> tuple[torch.Tensor, torch.Tensor]:
         '''
         Compare two images and return the segmentation masks.
+        `resolution0` is necessary to ensure the two images have the same resolution.
+
+        Parameters
+        ----------
+        resolution0: float
+            By default 0.3m/pixel
+
         '''
         image0 = Image.open(image0_path)
         image1 = Image.open(image1_path)

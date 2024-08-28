@@ -4,6 +4,7 @@ import cv2
 from skimage.measure import regionprops
 from skimage.morphology import dilation, disk
 from scipy.spatial.distance import cdist
+import matplotlib.pyplot as plt
 
 def get_instances(mask : np.array,
                   disk_size : int = 0,
@@ -108,7 +109,8 @@ def get_nearest_pairs(unmatched_t0,
                       unmatched_t1,
                       distance_matrix,
                       instances_t0,
-                      instances_t1):
+                      instances_t1,
+                      score_threshold : float = 100.0):
     nearest_pairs0 = []
     nearest_pairs1 = []
     nn_pairs0_dict = {}
@@ -124,7 +126,7 @@ def get_nearest_pairs(unmatched_t0,
                 best_score = distance
                 best_match = inst1['label']
 
-        if best_score > 80:
+        if best_score > score_threshold:
             not_matched_0.add(inst0['label'])
         else:
             nearest_pairs0.append((inst0, instances_t1[best_match]))
@@ -139,7 +141,7 @@ def get_nearest_pairs(unmatched_t0,
                 best_score = distance
                 best_match = inst0['label']
         
-        if best_score > 100:
+        if best_score > score_threshold:
             not_matched_1.add(inst1['label'])
         else:
             nearest_pairs1.append((instances_t0[best_match], inst1))
@@ -184,7 +186,8 @@ def get_change(unmatched_t1,
                not_matched_1,
                segment0,
                segment1,
-               ):
+               iou_threshold : float = 0.4,
+               distance_threshold : float = 100.0):
     change_in_1 = set()
     single_in_1 = set([inst['label'] for inst in unmatched_t1])
 
@@ -194,7 +197,7 @@ def get_change(unmatched_t1,
         big_box = get_minimum_bounding_box([insts[i]['bbox'] for i in range(len(insts))])
         seg0_crop = crop_tensor(segment0, big_box)
         seg1_crop = crop_tensor(segment1, big_box)
-        if calculate_iou(seg0_crop, seg1_crop)<=0.4:
+        if calculate_iou(seg0_crop, seg1_crop)<=iou_threshold:
             change_in_1.add(label_1)
         single_in_1.remove(label_1)
 
@@ -205,7 +208,7 @@ def get_change(unmatched_t1,
         big_box = get_minimum_bounding_box([insts[i]['bbox'] for i in range(len(insts))])
         seg0_crop = crop_tensor(segment0, big_box)
         seg1_crop = crop_tensor(segment1, big_box)
-        if calculate_iou(seg0_crop, seg1_crop)<=0.4:
+        if calculate_iou(seg0_crop, seg1_crop)<=iou_threshold:
             change_in_1 = change_in_1.union(labels)
         single_in_1 = single_in_1 - labels
     
@@ -219,7 +222,7 @@ def get_change(unmatched_t1,
         seg0_crop = crop_tensor(segment0, big_box)
         seg1_crop = crop_tensor(segment1, big_box)
         # print(calculate_iou(seg0_crop, seg1_crop))
-        if calculate_iou(seg0_crop, seg1_crop)<=0.30 or distance_matrix[inst0['label'], label_1]>100:
+        if calculate_iou(seg0_crop, seg1_crop)<=iou_threshold or distance_matrix[inst0['label'], label_1]>distance_threshold:
             change_in_1.add(label_1)
 
     for inst0, inst1 in nearest_pairs1:
@@ -229,3 +232,120 @@ def get_change(unmatched_t1,
     change_in_1 = change_in_1 | not_matched_1
     
     return change_in_1
+
+def get_change_whole(seg0,
+                     seg1,
+                     disk_size : int = 0,
+                     bbox_size_lim : int = 20,
+                     iou_threshold_match : float = 0.5,
+                     iou_threshold_change : float = 0.4,
+                     distance_threshold_match : float = 15.0,
+                     distance_threshold_change : float = 100.0,
+                     score_threshold : float = 100.0,):
+
+    instances_0 = get_instances(seg0.to(torch.int8).numpy(), disk_size, bbox_size_lim)
+    instances_1 = get_instances(seg1.to(torch.int8).numpy(), disk_size, bbox_size_lim)
+    matched_t0_indices, matched_t1_indices, unmatched_t0, unmatched_t1, matched_pairs, distance_matrix = get_match(instances_0,
+                                                                                                                   instances_1,
+                                                                                                                   iou_threshold_match,
+                                                                                                                   distance_threshold_match)
+    nearest_pairs0, nearest_pairs1, nn_pairs0_dict, nn_pairs1_dict, not_matched_0, not_matched_1 = get_nearest_pairs(unmatched_t0,
+                                                                                                                     unmatched_t1,
+                                                                                                                     distance_matrix,
+                                                                                                                     instances_0,
+                                                                                                                     instances_1,
+                                                                                                                     score_threshold)
+    inst0_count, inst1_count, multi_targeted_inst0, multi_targeted_inst1 = arrow_count(nearest_pairs0,
+                                                                                       nearest_pairs1)
+    change_in_1 = get_change(unmatched_t1,
+                            distance_matrix,
+                            multi_targeted_inst0,
+                            multi_targeted_inst1,
+                            instances_0,
+                            instances_1,
+                            nearest_pairs1,
+                            nn_pairs0_dict,
+                            nn_pairs1_dict,
+                            not_matched_1,
+                            seg0,
+                            seg1,
+                            iou_threshold_change,
+                            distance_threshold_change)
+    
+    return instances_0, instances_1, matched_pairs, nearest_pairs0, nearest_pairs1, change_in_1
+
+def get_comparaison(seg0,
+                    seg1,
+                    img1,
+                    figsize : tuple = (10, 10),
+                    x_lim : tuple = (0, 1000),
+                    y_lim : tuple = (900, 0),
+                    disk_size : int = 0,
+                    bbox_size_lim : int = 20,
+                    iou_threshold_match : float = 0.5,
+                    iou_threshold_change : float = 0.4,
+                    distance_threshold_match : float = 15.0,
+                    distance_threshold_change : float = 100.0,
+                    score_threshold : float = 100.0,):
+    
+    instances_0, instances_1, matched_pairs, nearest_pairs0, nearest_pairs1, change_in_1 = get_change_whole(seg0,
+                                                                                                            seg1,
+                                                                                                            disk_size,
+                                                                                                            bbox_size_lim,
+                                                                                                            iou_threshold_match,
+                                                                                                            iou_threshold_change,
+                                                                                                            distance_threshold_match,
+                                                                                                            distance_threshold_change,
+                                                                                                            score_threshold)
+    
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.imshow(img1)
+
+    #draw bboxes of instances in image0
+    for i, inst in enumerate(instances_0):
+        centroid = inst['centroid']
+        bbox = inst['bbox']
+        cy, cx = centroid
+        ax.plot(cx, cy, 'bo')
+        rect = plt.Rectangle((bbox[1], bbox[0]), bbox[3] - bbox[1], bbox[2] - bbox[0],
+                            edgecolor='blue', facecolor='none', linewidth=2, label='BBox 1' if i == 0 else "")
+        ax.add_patch(rect)
+
+    # draw bboxes of instances in image1
+    for i, inst in enumerate(instances_1):
+        centroid = inst['centroid']
+        bbox = inst['bbox']
+        cy, cx = centroid
+        ax.plot(cx, cy, 'go')
+        rect = plt.Rectangle((bbox[1], bbox[0]), bbox[3] - bbox[1], bbox[2] - bbox[0],
+                            edgecolor='green', facecolor='none', linewidth=2, label='BBox 2' if i == 0 else "")
+        ax.add_patch(rect)
+
+    # matched pairs in image0 and image1
+    for pair in matched_pairs:
+        centroid_t0= pair[0]['centroid']
+        centroid_t1 = pair[1]['centroid']
+        ax.plot([centroid_t0[1], centroid_t1[1]], [centroid_t0[0], centroid_t1[0]], 'w', linewidth=1, label='Matching Line' if pair == matched_pairs[0] else "")
+
+    # nearest pairs for the other unmatched instances
+    for pair in nearest_pairs0:
+        centroid_t0 = pair[0]['centroid']
+        centroid_t1 = pair[1]['centroid']
+        ax.plot([centroid_t0[1], centroid_t1[1]], [centroid_t0[0], centroid_t1[0]], 'gray', linewidth=1, label='nearest Line' if pair == nearest_pairs0[0] else "")
+    for pair in nearest_pairs1:
+        centroid_t0 = pair[0]['centroid']
+        centroid_t1 = pair[1]['centroid']
+        ax.plot([centroid_t0[1], centroid_t1[1]], [centroid_t0[0], centroid_t1[0]], 'gray', linewidth=1, label='nearest Line' if pair == nearest_pairs1[0] and nearest_pairs0==[] else "")
+
+    # changed instances in image1
+    for label in change_in_1:
+        bbox = instances_1[label]['bbox']
+        rect = plt.Rectangle((bbox[1], bbox[0]), bbox[3] - bbox[1], bbox[2] - bbox[0],
+                            edgecolor='red', facecolor='none', linewidth=2, label='changed buildings' if label == list(change_in_1)[0] else "")
+        ax.add_patch(rect)
+    ax.legend()
+    ax.set_xlim(x_lim)
+    ax.set_ylim(y_lim)
+    ax.set_aspect('equal', adjustable='box')
+
+    return fig
